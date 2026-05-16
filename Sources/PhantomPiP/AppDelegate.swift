@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import Carbon.HIToolbox
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSMenuDelegate {
 
@@ -32,8 +33,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var adblockListAdded = false
     private var loadedYouTubeID: String?
     private var youTubeFellBack = false
+    /// A phantompip:// target that arrived before the web view existed
+    /// (cold launch triggered by the URL); replayed once UI is ready.
+    private var pendingTarget: String?
 
     // MARK: - Lifecycle
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Canonical handler for a custom URL scheme. Registered here (not in
+        // didFinishLaunching) so the launch event that started the app is
+        // delivered. Works for cold start and while already running.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL))
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.applicationIconImage = AppIcon.make()
@@ -46,6 +61,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         compileAdblock()
 
         window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        if let target = pendingTarget {
+            pendingTarget = nil
+            playFromExternal(target)
+        }
+    }
+
+    // MARK: - phantompip:// scheme
+
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor,
+                                         withReplyEvent: NSAppleEventDescriptor) {
+        guard let raw = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?
+                .stringValue,
+              let url = URL(string: raw),
+              let target = PhantomURL.videoTarget(from: url)
+        else { return }
+
+        // UI may not exist yet on a cold launch — defer until it does.
+        if webView == nil {
+            pendingTarget = target
+        } else {
+            playFromExternal(target)
+        }
+    }
+
+    private func playFromExternal(_ target: String) {
+        load(target)
+        window.deminiaturize(nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -389,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard !trimmed.isEmpty else { return }
         lastInput = trimmed
 
-        if useYouTubeEmbed, let id = youTubeID(from: trimmed) {
+        if useYouTubeEmbed, let id = YouTube.id(from: trimmed) {
             // The embed player must run inside an <iframe> on a page with a
             // real https origin, or YouTube rejects it (Error 150/153).
             loadedYouTubeWrapper = true
@@ -732,31 +777,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     """
 
     // MARK: - YouTube
-
-    private func youTubeID(from raw: String) -> String? {
-        let normalized = raw.contains("://") ? raw : "https://\(raw)"
-        guard let comps = URLComponents(string: normalized),
-              let host = comps.host?.lowercased() else { return nil }
-
-        var id: String?
-        if host.contains("youtu.be") {
-            id = comps.path.split(separator: "/").first.map(String.init)
-        } else if host.contains("youtube.com") {
-            let parts = comps.path.split(separator: "/").map(String.init)
-            if comps.path.hasPrefix("/watch") {
-                id = comps.queryItems?.first(where: { $0.name == "v" })?.value
-            } else if let kind = parts.first,
-                      kind == "shorts" || kind == "embed" || kind == "live",
-                      parts.count > 1 {
-                id = parts[1]
-            }
-        }
-        guard let videoID = id,
-              !videoID.isEmpty,
-              videoID.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
-        else { return nil }
-        return videoID
-    }
 
     /// Hosts the embed in an <iframe> on a page whose origin is
     /// `https://www.youtube.com` (set via the load's baseURL). That, plus the

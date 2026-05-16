@@ -25,15 +25,22 @@ struct HistoryEntry: Codable {
 final class HistoryStore {
     private(set) var items: [HistoryEntry] = []
     private let fileURL: URL
-    private let maxItems = 50
+    private let maxItems: Int
 
-    init() {
+    /// Default store: `~/Library/Application Support/PhantomPiP/`.
+    convenience init() {
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("PhantomPiP", isDirectory: true)
+        self.init(directory: base.appendingPathComponent("PhantomPiP", isDirectory: true))
+    }
+
+    /// Designated init with an injectable directory (used by tests so the
+    /// real history is never touched) and a configurable cap.
+    init(directory: URL, maxItems: Int = 50) {
         try? FileManager.default.createDirectory(
-            at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("history.json")
+            at: directory, withIntermediateDirectories: true)
+        self.fileURL = directory.appendingPathComponent("history.json")
+        self.maxItems = maxItems
         loadFromDisk()
     }
 

@@ -44,6 +44,42 @@ to PNG — useful for building a real `.icns` if you bundle a `.app`:
 swift run PhantomPiP --export-icon PhantomPiP-icon.png
 ```
 
+## Tests
+
+```sh
+swift test
+```
+
+Unit tests cover the pure logic — the `YouTube` URL parser, `HistoryStore`
+(dedup, cap, persistence, titles), `HistoryEntry.displayTitle`, and the
+`AppIcon` PNG export. `HistoryStore` takes an injectable directory so tests
+never touch your real history. The AppKit-bound window/menu code isn't unit
+tested (it needs a running app); it's exercised by the manual run above.
+
+## Chrome extension (send videos from the browser)
+
+A `.app` bundle registers the **`phantompip://`** URL scheme so a tiny MV3
+Chrome extension can hand the current page/link to the app — launching it if
+it isn't already running. A bare `swift run` binary can't register a scheme,
+so this path needs the bundle.
+
+```sh
+./scripts/make-app.sh          # builds ./PhantomPiP.app, registers the scheme
+open ./PhantomPiP.app          # (or move it to /Applications)
+```
+
+Then load the extension: Chrome → `chrome://extensions` → enable **Developer
+mode** → **Load unpacked** → select the `extension/` folder.
+
+- **Toolbar button**: sends the active tab to PhantomPiP.
+- **Right-click**: *Open in PhantomPiP* (page/video) or *Open link in
+  PhantomPiP* (links).
+
+The first time, Chrome asks "Open PhantomPiP.app?" — tick **Always allow** to
+skip it thereafter. The scheme accepts only `http(s)` targets:
+`phantompip://play?u=<percent-encoded URL>` (parsed by `PhantomURL`, unit
+tested). Re-run `make-app.sh` after changing app code to refresh the bundle.
+
 ## Use
 
 On launch, the window itself shows a **URL box** — paste a link, press Play,

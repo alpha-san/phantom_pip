@@ -10,6 +10,11 @@ let package = Package(
         .executableTarget(
             name: "PhantomPiP",
             path: "Sources/PhantomPiP"
+        ),
+        .testTarget(
+            name: "PhantomPiPTests",
+            dependencies: ["PhantomPiP"],
+            path: "Tests/PhantomPiPTests"
         )
     ]
 )
