@@ -36,6 +36,14 @@ swift build -c release
 .build/release/PhantomPiP
 ```
 
+The app icon (a ghost 👻 on a phantom-violet squircle) is drawn in code and
+set at launch, so it shows in the Dock / ⌘-Tab with no asset files. Export it
+to PNG — useful for building a real `.icns` if you bundle a `.app`:
+
+```sh
+swift run PhantomPiP --export-icon PhantomPiP-icon.png
+```
+
 ## Use
 
 On launch, the window itself shows a **URL box** — paste a link, press Play,
@@ -48,6 +56,8 @@ the **👻 PiP** menu-bar item (top-right of the screen), which also has:
 - **Click-through** — mouse clicks pass straight to the editor behind it.
 - **Fill Window With Video** — auto-zooms the video to fill the window.
 - **Use YouTube Embed Player** — rewrites YouTube links to the bare player.
+- **History ▸** — recently watched videos; pick one to replay it. *Clear
+  History* empties the list.
 - **Center / Reset Window** — recover a lost or pass-through window.
 
 Move the window with **⌘-drag anywhere**; resize from the grip in the
@@ -86,6 +96,17 @@ on by default (toggle with **⌘⌥⌃B** or *Block Ads* in the menus):
 Honest limits: the skipper is best-effort and brittle when YouTube changes its
 markup; the embed iframe is cross-origin so JS can't reach inside it (the
 content blocker still applies there); this is not as thorough as uBlock Origin.
+
+### History
+
+Watched videos are saved to
+`~/Library/Application Support/PhantomPiP/history.json` (a flat file — a
+non-bundled `swift run` binary has no stable `UserDefaults` domain). It
+survives quitting, so reopen the app and pick from **History ▸** in either
+menu to replay. Re-watching a URL moves it to the top rather than duplicating;
+the last 50 are kept, 25 shown. Titles are captured from the page (and, for
+embedded YouTube, the IFrame player) so the list is readable rather than raw
+URLs.
 
 ### Global hot keys
 

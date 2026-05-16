@@ -1,13 +1,18 @@
 import AppKit
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSMenuDelegate {
 
     private var window: OverlayWindow!
     private var webView: WKWebView!
     private var statusItem: NSStatusItem!
 
     private let userContent = WKUserContentController()
+
+    private let historyStore = HistoryStore()
+    private let historyStatusMenu = NSMenu()
+    private let historyAppMenu = NSMenu()
+    private var titleObservation: NSKeyValueObservation?
 
     private var clickThroughItem: NSMenuItem!
     private var fillWindowItem: NSMenuItem!
@@ -31,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.applicationIconImage = AppIcon.make()
         buildAppMenu()
         buildWindow()
         buildWebView()
@@ -72,6 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         appMenu.addItem(makeItem("Toggle Click-through  (⌘⌥⌃P)", #selector(toggleClickThroughMenu)))
         appMenu.addItem(makeItem("Toggle Ad Blocking  (⌘⌥⌃B)", #selector(toggleAdblockMenu)))
         appMenu.addItem(makeItem("Center / Reset Window  (⌘⌥⌃R)", #selector(panicResetMenu)))
+
+        appMenu.addItem(.separator())
+        historyAppMenu.delegate = self
+        let historyItem = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
+        historyItem.submenu = historyAppMenu
+        appMenu.addItem(historyItem)
 
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide PhantomPiP",
@@ -125,6 +137,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // is KVC-accessible on macOS WKWebView and stable for years.
         webView.setValue(false, forKey: "drawsBackground")
         container.addSubview(webView)
+
+        // Capture page titles (including late SPA updates on YouTube's watch
+        // page) to label history entries. The embed wrapper has no <title>,
+        // so its real title arrives via the IFrame API instead.
+        titleObservation = webView.observe(\.title, options: [.new]) { [weak self] _, _ in
+            guard let self,
+                  !self.loadedYouTubeWrapper,
+                  let title = self.webView.title, !title.isEmpty,
+                  !self.lastInput.isEmpty
+            else { return }
+            self.historyStore.setTitle(for: self.lastInput, title: title)
+        }
 
         webView.loadHTMLString(Self.startHTML, baseURL: nil)
 
@@ -186,6 +210,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         menu.addItem(adblockItem)
 
         menu.addItem(.separator())
+
+        historyStatusMenu.delegate = self
+        let historyItem = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
+        historyItem.submenu = historyStatusMenu
+        menu.addItem(historyItem)
 
         menu.addItem(makeItem("Center / Reset Window", #selector(panicResetMenu)))
 
@@ -318,6 +347,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     @objc private func quit() { NSApp.terminate(nil) }
 
+    @objc private func historyItemClicked(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? String { load(url) }
+    }
+
+    @objc private func clearHistory() { historyStore.clear() }
+
+    // MARK: - NSMenuDelegate (lazy History submenu)
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === historyStatusMenu || menu === historyAppMenu else { return }
+        menu.removeAllItems()
+
+        let items = historyStore.items
+        if items.isEmpty {
+            let empty = NSMenuItem(title: "No history yet", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+        for entry in items.prefix(25) {
+            let item = NSMenuItem(title: entry.displayTitle,
+                                  action: #selector(historyItemClicked(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = entry.url
+            item.toolTip = entry.url
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let clear = NSMenuItem(title: "Clear History",
+                               action: #selector(clearHistory), keyEquivalent: "")
+        clear.target = self
+        menu.addItem(clear)
+    }
+
     // MARK: - Behavior
 
     private func load(_ raw: String) {
@@ -331,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             loadedYouTubeWrapper = true
             loadedYouTubeID = id
             youTubeFellBack = false
+            historyStore.add(url: trimmed)
             webView.loadHTMLString(Self.youTubeWrapperHTML(id: id),
                                    baseURL: URL(string: "https://www.youtube.com"))
             return
@@ -343,6 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             NSSound.beep()
             return
         }
+        historyStore.add(url: trimmed)
         webView.load(URLRequest(url: url))
     }
 
@@ -483,6 +549,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         guard message.name == "phantom", let body = message.body as? String else { return }
         if body.hasPrefix("yterror:") {
             handleYouTubeEmbedError()
+        } else if body.hasPrefix("yttitle:") {
+            historyStore.setTitle(for: lastInput,
+                                  title: String(body.dropFirst("yttitle:".count)))
         } else {
             load(body)
         }
@@ -709,6 +778,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 playerVars:{autoplay:1,playsinline:1,rel:0,modestbranding:1,
                   origin:'https://www.youtube.com'},
                 events:{
+                  onReady:function(e){
+                    try{
+                      var t=e.target.getVideoData().title;
+                      if(t) window.webkit.messageHandlers.phantom.postMessage('yttitle:'+t);
+                    }catch(_){}
+                  },
                   onError:function(e){
                     window.webkit.messageHandlers.phantom.postMessage('yterror:'+e.data);
                   }
